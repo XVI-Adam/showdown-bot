@@ -1,0 +1,29 @@
+[project]
+name = "psbot"
+version = "0.1.0"
+description = "Hybrid heuristic + PPO agent for Pokémon Showdown Gen 9 Random Battles"
+requires-python = ">=3.12,<3.13"
+# Exact pins. poke-env itself pins gymnasium==1.3.0 and websockets==16.1.1, so
+# upgrade poke-env first and let it dictate those. uv.lock pins everything else.
+dependencies = [
+    "poke-env==0.16.1",
+    "gymnasium==1.3.0",
+    "numpy==2.5.4",
+    "stable-baselines3==2.9.2",
+    "torch==2.15.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest==9.2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: needs the local Showdown server (auto-skipped when it is down)",
+]
