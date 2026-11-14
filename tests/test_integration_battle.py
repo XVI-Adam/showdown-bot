@@ -174,3 +174,47 @@ def test_hybrid_trains_saves_and_plays(tmp_path) -> None:
     assert agent.n_illegal_actions == 0
     assert agent.n_choices > 0
     assert agent.policy.prior_scale.item() == pytest.approx(15.0, abs=0.5)  # restored from the file
+
+
+@pytest.mark.parametrize("bot", ["heuristic", "checkpoints/ppo-v1/final.zip"])
+def test_hosted_bot_accepts_a_challenge_and_logs_the_battle(bot, tmp_path) -> None:
+    """What a person does in the browser, done by a stand-in challenger."""
+    from pathlib import Path
+
+    from psbot.hosting import create_hosted_bot
+
+    if bot.endswith(".zip") and not Path(bot).is_file():
+        pytest.skip("trained checkpoint not available")
+
+    async def play():
+        hosted, recorder = create_hosted_bot(bot, name="HostedTestBot", log_path=tmp_path / "human.jsonl")
+        challenger = RandomPlayer(
+            account_configuration=AccountConfiguration.generate("Visitor", rand=True),
+            battle_format=BATTLE_FORMAT,
+            server_configuration=local_server_configuration(),
+        )
+        await asyncio.wait_for(
+            asyncio.gather(
+                hosted.accept_challenges(challenger.username, 1),
+                challenger.send_challenges(hosted.username, 1),
+            ),
+            timeout=60,
+        )
+        await hosted.ps_client.stop_listening()
+        await challenger.ps_client.stop_listening()
+        return hosted, recorder
+
+    hosted, recorder = asyncio.run(play())
+    assert hosted.n_finished_battles == 1
+    (record,) = recorder.records
+    assert record["opponent_kind"] == "human"
+    assert record["decisions"] and record["events"]
+    assert len((tmp_path / "human.jsonl").read_text().splitlines()) == 1
+
+
+def test_hosted_bot_rejects_a_bad_name() -> None:
+    from psbot.hosting import create_hosted_bot
+
+    for name in ("", "x" * 19):
+        with pytest.raises(ValueError, match="name must be"):
+            create_hosted_bot("heuristic", name=name)

@@ -40,8 +40,44 @@ uv run python scripts/train_ppo.py --run-name hybrid-v3 --agent hybrid --prior-s
 uv run python scripts/evaluate.py checkpoints/hybrid-v2-sparse/final.zip      # measure any agent in fresh battles
 uv run python scripts/evaluate.py heuristic --opponents checkpoints/ppo-v1/final.zip   # any agent vs any agent
 uv run python scripts/final_evaluation.py            # round-robin of all agents + performance report
+uv run python scripts/play_against_bot.py            # play against the bot yourself (see below)
 uv run pytest                                        # integration tests skip if the server is down
 ```
+
+## Play against the bot
+
+Start the server (`scripts/start_server.sh`), then in another terminal:
+
+```bash
+uv run python scripts/play_against_bot.py                                        # heuristic agent
+uv run python scripts/play_against_bot.py --bot checkpoints/hybrid-v2-sparse/final.zip   # the hybrid
+```
+
+1. Open <http://localhost:8000> in your browser. It loads the official
+   Showdown client, which connects to your local server.
+2. Pick any username (no password is needed on this server).
+3. Click **Find a user**, type `ShowdownBot`, then Challenge it in the format
+   **[Gen 9] Random Battle**. Challenges in other formats are ignored.
+
+The bot answers instantly and accepts 10 battles by default (`-n` changes
+that). Each finished battle is saved to `logs/human/` with the bot's reasoning
+per turn, which `psbot.analysis` can study.
+
+Things to know:
+
+- **The bot does not learn from your games.** Training is `scripts/train_ppo.py`
+  against scripted bots and earlier checkpoints; playing it is practice for you
+  and a way to see its weaknesses first-hand (it is most beatable by setup
+  sweepers and by Pokémon whose moves it has not seen yet; see the report).
+- **Browser caveat.** The page is the public Showdown client talking to a
+  server on your own machine. Recent Chrome versions may ask permission to
+  connect to local devices; allow it. In the pane of the Claude desktop app I
+  tested in, that connection was blocked, so this path is verified only up to
+  the server (a WebSocket handshake with the client's origin succeeds, and a
+  stand-in challenger plays the bot in the test suite).
+- **Keep the server local.** It runs without login checks; do not port-forward
+  it. To play friends' bots or friends themselves, use the official site, not
+  this server.
 
 ## The heuristic agent
 
@@ -220,6 +256,7 @@ src/psbot/
     policy.py        masked PPO policy, and the hybrid policy with a learnable heuristic prior
     callbacks.py     win-rate logging, critic warm-up
   opponents.py       opponent registry: scripted players or saved checkpoints
+  hosting.py         a bot that accepts challenges from people on the local server
   analysis.py        what separates losses from wins, prediction accuracy, hybrid deviations
   report.py          Markdown performance report from evaluation results
   players/           agents (poke-env Player subclasses): heuristic, ppo (also plays hybrids)
