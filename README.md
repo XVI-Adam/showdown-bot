@@ -79,6 +79,40 @@ Things to know:
   it. To play friends' bots or friends themselves, use the official site, not
   this server.
 
+## Official server
+
+`psbot.battle_adapters.official` connects our agents, unchanged, to the
+official Pokémon Showdown server. So far it only connects and logs in;
+challenges and battles are the next phase.
+
+**Before any login:** Showdown's bot policy of 2026-10-09
+([announcement](https://www.smogon.com/forums/threads/3789528/)) makes bot
+registration mandatory. In the Showdown client type `/ht`, then choose
+*Something else* > *I want to register my bot*. The adapter refuses to log in
+until you set `PSBOT_BOT_REGISTERED=1`.
+
+Create a `.env` file in the project root (git-ignored; `chmod 600 .env`):
+
+```
+PSBOT_USERNAME=YourBotAccount
+PSBOT_PASSWORD=...
+PSBOT_BOT_REGISTERED=1
+```
+
+```bash
+uv run python scripts/check_official_login.py --handshake-only   # connect only, no account needed
+uv run python scripts/check_official_login.py                    # log in, confirm the name, log out
+```
+
+What the adapter adds to poke-env's client:
+
+- login as documented in the simulator's `PROTOCOL.md`, with every failure
+  reported as a clear error;
+- the login assertion is redacted from all logs (poke-env's and the websocket
+  library's), and the password is never stored where it can be printed;
+- outgoing messages are spaced 650 ms apart, inside the server's rate limit;
+- the password can only be sent to the official login server.
+
 ## The heuristic agent
 
 Every legal move and switch gets a score that is the sum of named components,
@@ -257,6 +291,7 @@ src/psbot/
     callbacks.py     win-rate logging, critic warm-up
   opponents.py       opponent registry: scripted players or saved checkpoints
   hosting.py         a bot that accepts challenges from people on the local server
+  battle_adapters/   official-server connection: credentials, login, redaction, rate limit
   analysis.py        what separates losses from wins, prediction accuracy, hybrid deviations
   report.py          Markdown performance report from evaluation results
   players/           agents (poke-env Player subclasses): heuristic, ppo (also plays hybrids)
@@ -274,6 +309,10 @@ The server runs with `--no-security` (no rate limits, no login checks) so bots
 can play thousands of battles quickly. `setup_showdown.sh` therefore binds it
 to `127.0.0.1`, `start_server.sh` refuses to start otherwise, and
 `psbot.config` rejects non-loopback hosts. Do not port-forward it.
+
+The official-server adapter is separate: it never uses the local server's
+password-less login, reads the bot account from the environment or `.env`
+(never committed), and keeps the password and login assertion out of logs.
 
 ## Pinned versions
 
