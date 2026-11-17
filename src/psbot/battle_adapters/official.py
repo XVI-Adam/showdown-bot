@@ -15,7 +15,11 @@ does not:
 * **Safety rails.** The password is only ever sent to the official login
   server, and an account not registered as a bot is refused.
 
-Reconnecting and battle handling are deliberately absent: that is Phase 3.
+* **Reconnect.** A dropped connection is retried a few times with growing
+  pauses, logging in again each time. The server then puts us back into any
+  battle still running (``Rooms.global.rejoinGames``).
+
+Challenges and battles are handled by ``psbot.battle_adapters.session``.
 """
 
 from __future__ import annotations
@@ -35,6 +39,7 @@ from poke_env.concurrency import POKE_LOOP, create_in_poke_loop, handle_threaded
 from poke_env.data import to_id_str
 from poke_env.player import Player
 from poke_env.ps_client import PSClient
+from websockets.exceptions import ConnectionClosed
 
 from psbot.battle_adapters.credentials import REGISTERED_VAR, BotCredentials, CredentialsError
 from psbot.config import BATTLE_FORMAT
@@ -46,10 +51,19 @@ LOGIN_URL = "https://play.pokemonshowdown.com/api/login"
 # The server's throttle is 600 ms for ordinary accounts; stay clear of it.
 MIN_SEND_INTERVAL = 0.65
 HANDSHAKE_NAME = "psbot-handshake"
+# Pauses before each reconnection attempt; giving up after the last one.
+RECONNECT_DELAYS: tuple[float, ...] = (2.0, 5.0, 10.0, 20.0, 30.0)
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _TRN = re.compile(r"(/trn [^,|\n]*,\d+,)[^\n]+")
 
 AssertionFetcher = Callable[[str, str, str], str]
+OutgoingFilter = Callable[[str, str], "str | None"]
+
+
+def identity_name(identity: str) -> str:
+    """``" Name"`` / ``"+Name@!"`` -> ``"Name"``: drop the rank character and
+    the away marker Showdown puts around usernames."""
+    return identity[1:].removesuffix("@!")
 
 
 class LoginError(RuntimeError):
@@ -133,6 +147,7 @@ class OfficialPSClient(PSClient):
         server_configuration: ServerConfiguration = OFFICIAL_SERVER,
         fetch_assertion: AssertionFetcher | None = None,
         min_send_interval: float = MIN_SEND_INTERVAL,
+        reconnect_delays: tuple[float, ...] = RECONNECT_DELAYS,
         start_listening: bool = True,
         **kwargs: Any,
     ) -> None:
@@ -154,6 +169,15 @@ class OfficialPSClient(PSClient):
         self._fetch_assertion: AssertionFetcher = fetch_assertion or _default_fetch_assertion
         self._min_send_interval = min_send_interval
         self._last_send = 0.0
+        self._reconnect_delays = reconnect_delays
+        self._reconnects_left = len(reconnect_delays)
+        self._closing = False
+        self.closed = False  # True once the listener has stopped for good
+        self.n_reconnects = 0
+        # Set by the battle session: may rewrite or drop (None) a room message,
+        # and is told about every successful login.
+        self.outgoing_filter: OutgoingFilter | None = None
+        self.on_login: Callable[[], None] | None = None
         self._login_error: LoginError | None = None
         self.confirmed_username: str | None = None
         loop = kwargs.get("loop", POKE_LOOP)
@@ -187,14 +211,38 @@ class OfficialPSClient(PSClient):
     # ------------------------------------------------------------ connection
 
     async def listen(self) -> None:
+        """Listen until told to stop, reconnecting after a dropped connection.
+
+        Only a connection that had logged in is retried: a failed first
+        connection or a rejected login is reported instead of repeated.
+        """
         try:
-            await super().listen()
+            while True:
+                await super().listen()  # returns when the socket closes
+                if (
+                    self._closing
+                    or self.confirmed_username is None  # never got in: report, don't retry
+                    or self._login_error is not None
+                    or not self._reconnects_left
+                ):
+                    break
+                delay = self._reconnect_delays[-self._reconnects_left]
+                self._reconnects_left -= 1
+                self.n_reconnects += 1
+                self.logger.warning("connection lost; reconnecting in %.0fs", delay)
+                self.logged_in.clear()
+                self._login_settled.clear()
+                await asyncio.sleep(delay)
+                if self._closing:
+                    break
         finally:
+            self.closed = True
             if not self._login_settled.is_set():
                 self._fail("connection failed or closed before login finished")
             self._greeted.set()
 
     async def _stop_listening(self) -> None:
+        self._closing = True
         websocket = getattr(self, "websocket", None)
         if websocket is not None:
             await websocket.close()
@@ -242,6 +290,14 @@ class OfficialPSClient(PSClient):
             self.logger.error("%s", self._login_error)
             await self._stop_listening()
             return
+        if kind == "pm":
+            # One message can carry several lines (every pending challenge is
+            # re-sent after a login); poke-env only dispatches single lines.
+            for line in message.split("\n"):
+                fields = line.split("|")
+                if len(fields) > 4 and fields[1] == "pm" and fields[4].startswith("/challenge"):
+                    await self._handle_challenge_request(fields)
+            return
         await super()._handle_message(message)
 
     def _on_updateuser(self, user: str, named: str) -> None:
@@ -256,8 +312,11 @@ class OfficialPSClient(PSClient):
                     "the server spells the username %r; set PSBOT_USERNAME to match", name
                 )
             self.confirmed_username = name
+            self._reconnects_left = len(self._reconnect_delays)
             self.logged_in.set()
             self._login_settled.set()
+            if self.on_login is not None:
+                self.on_login()
         else:
             self._fail(f"the server logged us in under a different name: {name!r}")
 
@@ -289,13 +348,24 @@ class OfficialPSClient(PSClient):
 
     async def send_message(self, message: str, room: str = "", message_2: str | None = None) -> None:
         """Send one message, redacted in the log and spaced for the rate limit."""
+        if room and self.outgoing_filter is not None:
+            filtered = self.outgoing_filter(room, message)
+            if filtered is None:
+                return
+            message = filtered
         to_send = "|".join([room, message, message_2] if message_2 else [room, message])
         async with self._sending_lock:
             wait = self._last_send + self._min_send_interval - time.monotonic()
             if wait > 0:
                 await asyncio.sleep(wait)
             self.logger.info(">>> %s", redact(to_send))
-            await self.websocket.send(to_send)
+            try:
+                await self.websocket.send(to_send)
+            except ConnectionClosed:
+                # Not retried here: after a reconnect the server re-sends any
+                # request it still needs an answer to.
+                self.logger.warning("not sent, connection is down: %s", redact(to_send))
+                return
             self._last_send = time.monotonic()
 
 
@@ -304,7 +374,8 @@ def create_official_player(bot: str, credentials: BotCredentials, **client_kwarg
 
     ``bot`` is ``heuristic``, another scripted player, or a checkpoint path
     (see ``psbot.opponents.make_opponent``). The player logs in and then does
-    nothing: it accepts or sends a challenge only when told to (Phase 3).
+    nothing: challenges are accepted or sent only through an ``OfficialSession``
+    (``psbot.battle_adapters.session``).
     """
     from psbot.opponents import make_opponent  # imports torch; keep login checks light
 

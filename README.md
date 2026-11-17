@@ -82,8 +82,8 @@ Things to know:
 ## Official server
 
 `psbot.battle_adapters.official` connects our agents, unchanged, to the
-official Pokémon Showdown server. So far it only connects and logs in;
-challenges and battles are the next phase.
+official Pokémon Showdown server and plays battles there against people you
+name. It never searches the ladder.
 
 **Before any login:** Showdown's bot policy of 2026-10-09
 ([announcement](https://www.smogon.com/forums/threads/3789528/)) makes bot
@@ -103,6 +103,32 @@ PSBOT_BOT_REGISTERED=1
 uv run python scripts/check_official_login.py --handshake-only   # connect only, no account needed
 uv run python scripts/check_official_login.py                    # log in, confirm the name, log out
 ```
+
+Play (the other person must have agreed to battle a bot):
+
+```bash
+uv run python scripts/play_official.py --accept-from FriendName      # wait for their challenge
+uv run python scripts/play_official.py --challenge FriendName        # or challenge them once
+uv run python scripts/play_official.py --bot checkpoints/hybrid-v2-sparse/final.zip \
+    --accept-from FriendOne,FriendTwo -n 3                           # hybrid, up to 3 battles
+```
+
+It plays one battle (`-n` for more) and exits. Rules the session enforces:
+
+- only **[Gen 9] Random Battle** challenges from the named users are accepted;
+  anything else is declined, once per challenger per minute;
+- one battle at a time; a challenge is accepted once even if announced twice;
+- a battle room that is not in our format or not against the agreed opponent
+  is forfeited and left;
+- every request from the server is answered exactly once: choices carry the
+  server's request number and repeats are dropped;
+- a dropped connection is retried five times (2 to 30 s apart); the server
+  puts the bot back in its battle and the state is rebuilt from the log;
+- if nothing happens in a battle for 3 minutes the bot starts the timer;
+- Ctrl-C withdraws any challenge, forfeits a battle in progress and logs out.
+
+Battles are saved to `logs/human/official-<time>.jsonl` in the existing log
+format.
 
 What the adapter adds to poke-env's client:
 
@@ -291,7 +317,8 @@ src/psbot/
     callbacks.py     win-rate logging, critic warm-up
   opponents.py       opponent registry: scripted players or saved checkpoints
   hosting.py         a bot that accepts challenges from people on the local server
-  battle_adapters/   official-server connection: credentials, login, redaction, rate limit
+  battle_adapters/   official server: credentials, login, redaction, rate limit, reconnect,
+                     and the consent-based challenge/battle session
   analysis.py        what separates losses from wins, prediction accuracy, hybrid deviations
   report.py          Markdown performance report from evaluation results
   players/           agents (poke-env Player subclasses): heuristic, ppo (also plays hybrids)

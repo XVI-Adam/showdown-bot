@@ -13,11 +13,16 @@ from psbot.battle_adapters.official import (
     create_official_player,
 )
 
+from psbot.battle_adapters.session import BattleOutcome, ChoiceGuard, OfficialSession
+
 __all__ = [
+    "BattleOutcome",
     "BotCredentials",
+    "ChoiceGuard",
     "CredentialsError",
     "LoginError",
     "OfficialPSClient",
+    "OfficialSession",
     "create_official_player",
     "load_credentials",
 ]
