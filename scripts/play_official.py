@@ -17,7 +17,8 @@ challenges anyone you did not name. Ctrl-C withdraws any challenge, forfeits a
 battle in progress and logs out.
 
 Needs the bot account in .env (see README, "Official server"). Finished
-battles are saved to logs/human/ with the bot's reasoning for each turn.
+battles are saved to data/human/ with the bot's reasoning for each turn and
+what was known about the opponent at that moment.
 """
 
 from __future__ import annotations
@@ -26,15 +27,13 @@ import argparse
 import asyncio
 import logging
 import sys
-from datetime import datetime
-from pathlib import Path
 
 from psbot.battle_adapters.credentials import CredentialsError, load_credentials
 from psbot.battle_adapters.official import LoginError, create_official_player
 from psbot.battle_adapters.session import OfficialSession
-from psbot.config import BATTLE_FORMAT, LOG_DIR
+from psbot.config import BATTLE_FORMAT
 from psbot.logging_setup import setup_logging
-from psbot.recording import BattleRecorder
+from psbot.dataset import HumanBattleRecorder, agent_info
 
 
 def names(values: list[str] | None) -> list[str]:
@@ -53,9 +52,7 @@ async def main(args: argparse.Namespace) -> int:
     session = OfficialSession(player, approved, max_battles=args.n_battles)
     recorder = None
     if hasattr(player, "recorder"):
-        kind = Path(args.bot).parent.name if args.bot.endswith(".zip") else args.bot
-        path = LOG_DIR / "human" / f"official-{datetime.now():%Y%m%d-%H%M%S}.jsonl"
-        recorder = BattleRecorder(path, player_kind=kind, save_events=True)
+        recorder = HumanBattleRecorder(agent_info(args.bot, player), source="official")
         player.recorder = recorder
         player.opponent_kind = "human"
 
@@ -84,7 +81,8 @@ async def main(args: argparse.Namespace) -> int:
     if session.n_rejected:
         print(f"declined {session.n_rejected} challenge(s)")
     if recorder is not None and recorder.n_written:
-        print(f"battle log: {recorder.path}")
+        print(f"battle record: {recorder.path}")
+        print(f"check it with: uv run python scripts/validate_dataset.py {recorder.path}")
     return 0
 
 

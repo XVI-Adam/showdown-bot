@@ -127,8 +127,7 @@ It plays one battle (`-n` for more) and exits. Rules the session enforces:
 - if nothing happens in a battle for 3 minutes the bot starts the timer;
 - Ctrl-C withdraws any challenge, forfeits a battle in progress and logs out.
 
-Battles are saved to `logs/human/official-<time>.jsonl` in the existing log
-format.
+Battles are saved to `data/human/official-<time>.jsonl` (see the next section).
 
 What the adapter adds to poke-env's client:
 
@@ -138,6 +137,53 @@ What the adapter adds to poke-env's client:
   library's), and the password is never stored where it can be printed;
 - outgoing messages are spaced 650 ms apart, inside the server's rate limit;
 - the password can only be sent to the official login server.
+
+## Human battle dataset
+
+Every finished battle against a person becomes one JSON line in `data/human/`
+(git-ignored, and separate from the bot-versus-bot logs in `logs/`). The full
+layout is documented at the top of `src/psbot/dataset/schema.py`. Per battle:
+id, date, format, server, the agent and its checkpoint (path and SHA-256), the
+opponent's username, the outcome, both teams as known, and the public battle
+log without chat. Per decision:
+
+- both sides' Pokémon with HP, status, boosts, and the field conditions;
+- the legal actions and the 26-entry action mask the learned agents use;
+- the selected action;
+- the heuristic engine's score for every legal action, split into its named
+  components, or the policy's probability for each action (plus, for the
+  hybrid, the heuristic scores it was shown);
+- the observation vector at that moment;
+- what the opponent was then seen to do.
+
+Battles are partially observable, so every fact about the opponent is labelled:
+
+| Label | Meaning |
+| --- | --- |
+| `revealed` | The battle log showed it: a move it used, an ability or item the log named, its Tera type. |
+| `inferred` | Not shown, but certain from public random-battle data (one possible ability, a forme's required item). The species' possible moves are listed once per battle under this label. |
+| `unknown` | Neither. The value is null. |
+
+"Revealed" is read from the log, not from poke-env's Pokémon objects, because
+both poke-env and our damage code fill in likely abilities and items. When the
+log is ambiguous about whose ability an effect belongs to, the fact is left
+unrevealed. Each decision records only what had been shown by then.
+
+```bash
+uv run python scripts/validate_dataset.py        # check and summarise data/human/
+```
+
+The validator re-reads each battle's log and rejects, among other things, a
+"revealed" fact that is not in the log at that point, an illegal selected
+action, and scores that do not add up. Measured on the local simulator, where
+the opponent's true team is known: across 450 battles every revealed ability
+(600), item (1,154) and Tera type (259) was correct, and 3,428 of 3,430
+revealed moves; the two misses were Illusions that never broke, which fool the
+log itself.
+
+`psbot.dataset.to_legacy_record` converts a record to the older log layout that
+`psbot.analysis` reads. The two battles played before this recorder existed
+are in `logs/human/` in that older layout.
 
 ## The heuristic agent
 
@@ -316,6 +362,7 @@ src/psbot/
     policy.py        masked PPO policy, and the hybrid policy with a learnable heuristic prior
     callbacks.py     win-rate logging, critic warm-up
   opponents.py       opponent registry: scripted players or saved checkpoints
+  dataset/           human-battle records: reveal tracking, recorder, schema and validator
   hosting.py         a bot that accepts challenges from people on the local server
   battle_adapters/   official server: credentials, login, redaction, rate limit, reconnect,
                      and the consent-based challenge/battle session
@@ -328,6 +375,7 @@ vendor/              Showdown checkout (git-ignored, pinned by setup script)
 reports/             final evaluation report
 checkpoints/         saved models (git-ignored)
 logs/                battle logs, statistics, training curves (git-ignored)
+data/                human battles, one JSON line each (git-ignored)
 ```
 
 ## Security

@@ -11,7 +11,7 @@ from poke_env.player import BattleOrder, Player
 from psbot.heuristics.context import BattleContext
 from psbot.heuristics.engine import ActionEvaluation, HeuristicEngine
 from psbot.heuristics.scorers import entry_damage
-from psbot.recording import BattleRecorder
+from psbot.recording import BattleRecorder  # or psbot.dataset.HumanBattleRecorder: same methods
 
 logger = logging.getLogger(__name__)
 
@@ -83,15 +83,19 @@ class HeuristicPlayer(Player):
 
         best = evaluations[0]
         logger.debug("turn %s: %s | %s", battle.turn, best.label, "; ".join(best.reasons()))
+        order = self.create_order(best.target, terastallize=best.terastallize)
         if self.recorder is not None:
-            self.recorder.record_decision(battle, evaluations, extra=predictions(ctx, best))
-        return self.create_order(best.target, terastallize=best.terastallize)
+            self.recorder.record_decision(
+                battle, evaluations, extra=predictions(ctx, best), order=order
+            )
+        return order
 
     def _fallback(self, battle: AbstractBattle, why: str) -> BattleOrder:
         self.n_fallback_decisions += 1
+        order = self.choose_random_move(battle)
         if self.recorder is not None:
-            self.recorder.record_decision(battle, [], fallback=why)
-        return self.choose_random_move(battle)
+            self.recorder.record_decision(battle, [], fallback=why, order=order)
+        return order
 
     def _battle_finished_callback(self, battle: AbstractBattle) -> None:
         if self.recorder is not None:
