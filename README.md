@@ -17,6 +17,7 @@ against a local simulator.
 ```bash
 uv sync                      # Python 3.12 venv + pinned dependencies
 scripts/setup_showdown.sh    # local Showdown server into vendor/
+uv run python scripts/build_randbats_stats.py   # set statistics for the opponent move model (about 2 minutes)
 ```
 
 ## Run
@@ -223,6 +224,52 @@ Known weaknesses, for later phases to address:
   when judging who moves first, and uncertain abilities are ignored.
 - **Terastallization is offensive-only**; it never Teras defensively.
 
+## The Phase 5 engine (`heuristic_v2`)
+
+`heuristic` is still the baseline above, unchanged, because the trained hybrids
+take its scores as input. `heuristic_v2` is the same engine with four additions
+switched on (`v2_weights` in `heuristics/context.py`):
+
+- **Opponent move model.** The simulator's own team generator is sampled
+  200,000 times to count what sets each species really gets. Given what a
+  Pokémon has shown, each unrevealed move gets a probability, and the threat
+  to us is weighted by them. Probabilities are well calibrated (a move
+  predicted at 50% is there 50% of the time). An unrevealed move is never
+  treated as confirmed, even at 100%.
+- **Sweep check and endgame search.** The fight is played forward with both
+  sides attacking. Early on this asks what their active Pokémon costs us
+  before it is stopped; once everything left is known, it searches the rest of
+  the battle by minimax over replacement choices.
+- **Damage refinements.** Possible unseen abilities that nullify a move,
+  accuracy and evasion stages, and a discount for attacks their revealed bench
+  is immune to.
+
+Measured against the baseline in 3,000-battle runs, the move model wins 53.7%
+(95% interval 51.9-55.5%). The other additions have shown no measurable effect
+on top of it, and the full `heuristic_v2` wins 52.8% (51.0-54.5%). Details,
+calibration tables and what remains open: [reports/phase5-engine.md](reports/phase5-engine.md).
+
+```bash
+uv run python scripts/evaluate.py heuristic_v2 --opponents heuristic simple_heuristics -n 1000
+uv run python scripts/play_official.py --bot heuristic_v2 --accept-from FriendName
+```
+
+## Opponent profiles
+
+```bash
+uv run python scripts/opponent_report.py                 # everyone you have played
+uv run python scripts/opponent_report.py SomeUsername    # one person in detail
+```
+
+Built from the battle logs only: leads, move and switch frequencies,
+aggression, setup use, repeated switches, how predictable their move choices
+are, attacks into resistances and immunities, and which of their Pokémon
+knocked ours out. Below five battles a profile shows counts and draws no
+conclusions; above that, every rate carries its sample size and a 95%
+interval, and a tendency is stated only when the interval clears its
+threshold. Profiles name real people, so they are saved (with `--write`) under
+the git-ignored `data/profiles/`.
+
 ## The PPO agent
 
 Built from the official poke-env Stable-Baselines3 example: a `SinglesEnv`
@@ -355,6 +402,9 @@ src/psbot/
     context.py       per-turn analysis (threats, exchanges) + tunable weights
     scorers.py       one function per scoring component
     engine.py        sums components, ranks actions, decides Terastallization
+    lookahead.py     forward projection: sweep check and minimax endgame (v2 only)
+  opponent_model/    belief over an opposing Pokémon's set, from measured set statistics
+  analytics/         per-opponent profiles from recorded human battles
   rl/
     observation.py   battle -> 112 floats, laid out to match the action space
     env.py           Gymnasium environment (poke-env SinglesEnv) + reward
@@ -372,7 +422,7 @@ src/psbot/
 scripts/             server setup/start, runnable entry points
 tests/               unit tests + end-to-end tests against the simulator
 vendor/              Showdown checkout (git-ignored, pinned by setup script)
-reports/             final evaluation report
+reports/             evaluation reports
 checkpoints/         saved models (git-ignored)
 logs/                battle logs, statistics, training curves (git-ignored)
 data/                human battles, one JSON line each (git-ignored)

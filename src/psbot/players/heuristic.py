@@ -8,7 +8,7 @@ from typing import Any
 from poke_env.battle import AbstractBattle, Move, Pokemon
 from poke_env.player import BattleOrder, Player
 
-from psbot.heuristics.context import BattleContext
+from psbot.heuristics.context import BattleContext, v2_weights
 from psbot.heuristics.engine import ActionEvaluation, HeuristicEngine
 from psbot.heuristics.scorers import entry_damage
 from psbot.recording import BattleRecorder  # or psbot.dataset.HumanBattleRecorder: same methods
@@ -100,3 +100,13 @@ class HeuristicPlayer(Player):
     def _battle_finished_callback(self, battle: AbstractBattle) -> None:
         if self.recorder is not None:
             self.recorder.finish_battle(battle, self.opponent_kind)
+
+
+class HeuristicV2Player(HeuristicPlayer):
+    """The heuristic agent with the Phase 5 engine (``v2_weights``): the
+    opponent move model, the sweep/endgame projection and the damage
+    refinements. ``HeuristicPlayer`` stays the unchanged baseline."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("engine", HeuristicEngine(v2_weights()))
+        super().__init__(*args, **kwargs)

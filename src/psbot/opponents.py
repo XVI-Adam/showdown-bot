@@ -7,7 +7,7 @@ from typing import Any
 
 from poke_env.player import MaxBasePowerPlayer, Player, RandomPlayer, SimpleHeuristicsPlayer
 
-from psbot.players.heuristic import HeuristicPlayer
+from psbot.players.heuristic import HeuristicPlayer, HeuristicV2Player
 from psbot.players.ppo import PPOPlayer
 
 SCRIPTED_OPPONENTS: dict[str, type[Player]] = {
@@ -15,6 +15,7 @@ SCRIPTED_OPPONENTS: dict[str, type[Player]] = {
     "max_base_power": MaxBasePowerPlayer,
     "simple_heuristics": SimpleHeuristicsPlayer,
     "heuristic": HeuristicPlayer,
+    "heuristic_v2": HeuristicV2Player,
 }
 
 

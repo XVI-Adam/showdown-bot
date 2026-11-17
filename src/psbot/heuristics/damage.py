@@ -66,6 +66,39 @@ class DamageEstimate:
 NO_DAMAGE = DamageEstimate()
 
 
+@dataclass(frozen=True)
+class MixtureEstimate(DamageEstimate):
+    """Damage from an attacker whose move we are not sure of.
+
+    ``parts`` holds ``(probability, estimate)`` pairs: with that probability
+    this is the hit we take. Probabilities may sum to less than 1; the rest is
+    "nothing that hurts". The inherited range fields describe the most likely
+    damaging part, for display only.
+    """
+
+    parts: tuple[tuple[float, DamageEstimate], ...] = ()
+
+    @property
+    def mean_fraction(self) -> float:
+        return sum(p * e.mean_fraction for p, e in self.parts)
+
+    @property
+    def expected(self) -> float:
+        return sum(p * e.expected for p, e in self.parts)
+
+    def ko_probability(self, hp_fraction: float) -> float:
+        return sum(p * e.ko_probability(hp_fraction) for p, e in self.parts)
+
+    def scaled(self, weight: float) -> "MixtureEstimate":
+        """Scale the chance of being hit at all (e.g. the attacker is asleep)."""
+        return MixtureEstimate(
+            self.min_fraction,
+            self.max_fraction,
+            self.accuracy,
+            tuple((p * weight, e) for p, e in self.parts),
+        )
+
+
 def is_own(battle: AbstractBattle, mon: Pokemon) -> bool:
     return any(mon is m for m in battle.team.values())
 
