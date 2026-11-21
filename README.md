@@ -270,6 +270,42 @@ interval, and a tendency is stated only when the interval clears its
 threshold. Profiles name real people, so they are saved (with `--write`) under
 the git-ignored `data/profiles/`.
 
+## Phase 7 evaluation
+
+28,000 battles: 8 agents in a round-robin, 1,000 battles per pairing, each
+battle measured from both sides. Full report with every metric and interval:
+[reports/phase7-evaluation.md](reports/phase7-evaluation.md).
+
+| Agent | Win rate vs the baseline's pool | vs all others |
+| --- | --- | --- |
+| `heuristic_v2` | 83.9% (82.9-84.9%) | 78.9% |
+| `heuristic` (baseline, 81.3% in the final evaluation) | 82.8% (81.7-83.8%) | 77.2% |
+| `hybrid` | 2.3 points below `heuristic` on the same opponents | 74.5% |
+| `bc` | 65.0% | 52.3% |
+
+- **`heuristic_v2` vs the baseline:** 52.7% head to head over 4,000 battles
+  (51.2-54.2%). It gets swept less (13.3% vs 16.2%), loses fewer Pokémon
+  right after switching in, and misses fewer sure KOs. Immunity hits and
+  endgames are unchanged.
+- **Default agent:** `heuristic` stays the default until `heuristic_v2` holds
+  up against people.
+- **Human results:** 6-5 over 11 battles, too few to rank anything.
+- **Bots vs people:** bot opponents almost never set up a sweeper (under 3% of
+  battles); the people did in 5 of 11. Bot evaluation barely tests the
+  weakness that matters most.
+
+Metrics include win rate per opponent, net knockouts by stage, setup
+sweepers, sweeps, knockouts by not-yet-seen moves, endgame win rate (from
+ahead, level or behind), missed sure KOs, moves into immunities, switching
+mistakes and remaining Pokémon. They are defined once in
+`src/psbot/evaluation/metrics.py` and computed from the full battle log for
+every agent, scripted bots included.
+
+```bash
+uv run python scripts/evaluate_all.py --run-dir logs/eval/phase7-mine -n 1000 --shard 0/4   # x4 in parallel: 0/4 .. 3/4
+uv run python scripts/evaluate_all.py --run-dir logs/eval/phase7-mine --report
+```
+
 ## Learning from games (Phase 6)
 
 Offline only; no production agent changes. Full results: [reports/phase6-learning.md](reports/phase6-learning.md).
@@ -432,6 +468,7 @@ src/psbot/
   opponent_model/    belief over an opposing Pokémon's set, from measured set statistics
   analytics/         per-opponent profiles from recorded human battles
   training/          decision datasets, behaviour cloning, opponent-adaptation analysis
+  evaluation/        Phase 7: per-battle metrics, decision probe, aggregation, report
   rl/
     observation.py   battle -> 112 floats, laid out to match the action space
     env.py           Gymnasium environment (poke-env SinglesEnv) + reward
