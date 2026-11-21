@@ -34,6 +34,7 @@ from poke_env.player import BattleOrder
 from psbot.config import PROJECT_ROOT
 from psbot.dataset.revealed import Revealed, RevealTracker
 from psbot.dataset.schema import DROPPED_EVENTS, SCHEMA
+from psbot.heuristics.mechanics import own_tera_type
 from psbot.heuristics.randbats import certain_ability, certain_item, possible_moves
 
 logger = logging.getLogger(__name__)
@@ -101,9 +102,13 @@ def _condition(mon: Pokemon) -> dict[str, Any]:
     }
 
 
-def own_pokemon(ident: str, mon: Pokemon) -> dict[str, Any]:
-    """One of ours: the server tells us everything, so nothing needs a label."""
-    tera = mon.tera_type
+def own_pokemon(ident: str, mon: Pokemon, battle: AbstractBattle | None = None) -> dict[str, Any]:
+    """One of ours: the server tells us everything, so nothing needs a label.
+
+    The Tera type comes from the server's request when ``battle`` is given:
+    poke-env only fills ``Pokemon.tera_type`` after Terastallizing.
+    """
+    tera = own_tera_type(battle, mon) if battle is not None else mon.tera_type
     return {
         "ident": ident,
         **_condition(mon),
@@ -205,8 +210,8 @@ class HumanBattleRecorder:
             "turn": battle.turn,
             "event_index": tracker.n_events,  # raw; rewritten when the battle is saved
             "forced_switch": bool(battle.force_switch),
-            "active": next((own_pokemon(i, m) for i, m in ours if m is active), None),
-            "bench": [own_pokemon(i, m) for i, m in ours if m is not active],
+            "active": next((own_pokemon(i, m, battle) for i, m in ours if m is active), None),
+            "bench": [own_pokemon(i, m, battle) for i, m in ours if m is not active],
             "opponent_active": next(
                 (opponent_pokemon(i, m, tracker.get(i)) for i, m in theirs if m is opp_active), None
             ),
@@ -389,7 +394,7 @@ class HumanBattleRecorder:
                 "opponent_seen": len(theirs),
             },
             "state_rebuilt": tag in self._rebuilt,
-            "team": [own_pokemon(ident, mon) for ident, mon in battle.team.items()],
+            "team": [own_pokemon(ident, mon, battle) for ident, mon in battle.team.items()],
             "opponent_team": opponent_team,
             "decisions": decisions,
             "events": events,

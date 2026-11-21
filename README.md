@@ -270,6 +270,34 @@ interval, and a tendency is stated only when the interval clears its
 threshold. Profiles name real people, so they are saved (with `--write`) under
 the git-ignored `data/profiles/`.
 
+## Team strength: luck of the draw or play?
+
+Random teams are not equally strong. For each recorded human battle, both
+teams are rebuilt and the same bot plays both sides hundreds of times on the
+local simulator. Our team's win share is that matchup's team strength.
+
+- **Rebuilding.** Our team is exact. For the opponent, everything the battle
+  revealed is kept; unrevealed moves, items, abilities, Tera types and unseen
+  Pokémon are sampled from the measured random-battle sets, and every team
+  passes the simulator's own validator before it plays.
+- **Validation.** On 60 bot battles where both teams are known, sampling
+  agreed with the true teams (correlation 0.82, no bias), and team strength
+  predicts the winner.
+- **Calibration.** Raw values are too extreme, so they are calibrated against
+  the actual outcomes.
+- **First result.** All five losses to one player came with the weaker team
+  (calibrated win chance 15-35% each). Bad draws alone give 0 wins out of 5
+  about 26% of the time, so the streak does not show that the player outplayed
+  the bot. More battles are needed to tell either way.
+
+```bash
+uv run python scripts/team_strength_report.py              # -> reports/team-strength.md (opponents shown as A, B, C)
+uv run python scripts/team_strength_report.py --validate 60
+```
+
+Only win counts are kept (`data/team_strength/`, a few KB); replay logs are
+discarded.
+
 ## Phase 7 evaluation
 
 28,000 battles: 8 agents in a round-robin, 1,000 battles per pairing, each
@@ -466,7 +494,7 @@ src/psbot/
     engine.py        sums components, ranks actions, decides Terastallization
     lookahead.py     forward projection: sweep check and minimax endgame (v2 only)
   opponent_model/    belief over an opposing Pokémon's set, from measured set statistics
-  analytics/         per-opponent profiles from recorded human battles
+  analytics/         per-opponent profiles; team strength by matchup replay
   training/          decision datasets, behaviour cloning, opponent-adaptation analysis
   evaluation/        Phase 7: per-battle metrics, decision probe, aggregation, report
   rl/
