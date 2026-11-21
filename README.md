@@ -270,6 +270,32 @@ interval, and a tendency is stated only when the interval clears its
 threshold. Profiles name real people, so they are saved (with `--write`) under
 the git-ignored `data/profiles/`.
 
+## Learning from games (Phase 6)
+
+Offline only; no production agent changes. Full results: [reports/phase6-learning.md](reports/phase6-learning.md).
+
+- **Behaviour cloning.** `heuristic_v2` played 4,000 local battles as teacher,
+  and the PPO agents' masked network was trained to imitate it. Data is split
+  by battle and checked for leakage, and masks are kept, so no illegal action
+  is possible. Result `checkpoints/bc-v1`: 60% agreement with the teacher on
+  separate test battles, about PPO-level strength (20% vs heuristic, 59% vs
+  SimpleHeuristics). Not promoted. Larger networks do no better: the 112 basic
+  features lack what the teacher uses.
+- **Self-play fine-tuning.** The cloned model resumes in `train_ppo.py`.
+  Self-play against frozen checkpoints is not supported yet.
+- **Opponent adaptation.** Predicting opponents' choices per person versus
+  population-wide works on bots with distinct styles, after about 5 battles.
+  On the 9 human battles so far there is no detectable gain.
+
+Human opponents' actions are never used as imitation targets: from our side
+we see neither their observation nor their legal actions.
+
+```bash
+uv run python scripts/generate_teacher_data.py --name v2-train -n 800   # synthetic data -> data/synthetic/
+uv run python scripts/train_bc.py --run-name bc-v2 --train data/synthetic/v2-train.npz --test data/synthetic/v2-test.npz
+uv run python scripts/analyze_opponent_adaptation.py                    # on data/human/
+```
+
 ## The PPO agent
 
 Built from the official poke-env Stable-Baselines3 example: a `SinglesEnv`
@@ -405,6 +431,7 @@ src/psbot/
     lookahead.py     forward projection: sweep check and minimax endgame (v2 only)
   opponent_model/    belief over an opposing Pokémon's set, from measured set statistics
   analytics/         per-opponent profiles from recorded human battles
+  training/          decision datasets, behaviour cloning, opponent-adaptation analysis
   rl/
     observation.py   battle -> 112 floats, laid out to match the action space
     env.py           Gymnasium environment (poke-env SinglesEnv) + reward
@@ -425,7 +452,7 @@ vendor/              Showdown checkout (git-ignored, pinned by setup script)
 reports/             evaluation reports
 checkpoints/         saved models (git-ignored)
 logs/                battle logs, statistics, training curves (git-ignored)
-data/                human battles, one JSON line each (git-ignored)
+data/                human battles (human/), synthetic training data (synthetic/), set statistics (git-ignored)
 ```
 
 ## Security
