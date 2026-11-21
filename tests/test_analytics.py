@@ -53,9 +53,8 @@ def test_one_battle_gives_counts_and_no_conclusions() -> None:
     assert "too few" in profile["note"]
     for interpreted in ("tendencies", "aggression", "switching", "predictability", "mistakes"):
         assert interpreted not in profile
-    assert profile["leads"] == [("garchomp", 1)]
-    assert dict(profile["most_used_moves"])["earthquake"] == 2  # the Copycat-called one is not a choice
-    assert profile["troublesome_pokemon"][0]["species"] == "rotomwash"
+    for species_level in ("leads", "most_used_moves", "troublesome_pokemon"):
+        assert species_level not in profile  # random teams: these describe the draw, not the player
     text = render_profile(profile)
     assert "insufficient" in text and "Tendencies" not in text
 
@@ -68,7 +67,6 @@ def test_counts_from_the_log() -> None:
     # Volt Switch exit and the replacement after the faint are not choices.
     assert profile["switching"]["rate_per_action"]["count"] == n
     assert profile["switching"]["rate_per_action"]["n"] == 7 * n
-    assert profile["switching"]["common_patterns"] == [{"out": "garchomp", "in": "rotomwash", "count": n}]
     assert profile["setup"]["rate_per_action"]["count"] == n
     assert profile["setup"]["battles_with_setup"]["value"] == 1.0
     assert profile["aggression"]["count"] == 5 * n  # 3 attacks + Volt Switch + Hydro Pump

@@ -317,13 +317,9 @@ def build_profile(opponent: str, battles: Iterable[BattleView]) -> dict[str, Any
         "battles": tally.battles,
         "confidence": level,
         "our_record": {"wins": tally.our_wins, "losses_or_ties": tally.battles - tally.our_wins},
-        "leads": tally.leads.most_common(5),
-        "most_used_moves": tally.moves.most_common(10),
-        "troublesome_pokemon": [
-            {"species": s, "kos": k, "appearances": tally.appearances[s], "our_losses_with_it": tally.losses_with[s]}
-            for s, k in tally.kos_by.most_common(5)
-        ],
     }
+    # Leads, favourite moves and which species beat ours are not reported:
+    # with random teams they describe the teams dealt, not the player.
     if level == "insufficient":
         profile["note"] = (
             f"{tally.battles} battle(s): too few to describe how this person plays. "
@@ -342,12 +338,6 @@ def build_profile(opponent: str, battles: Iterable[BattleView]) -> dict[str, Any
             "switching": {
                 "rate_per_action": _rate(tally.voluntary_switches, actions),
                 "per_battle": round(tally.voluntary_switches / tally.battles, 2),
-                "common_patterns": [
-                    {"out": out, "in": into, "count": count}
-                    for (out, into), count in tally.switch_pairs.most_common(5)
-                    if count >= 2  # a pattern seen once is an anecdote
-                ],
-                "most_switched_out": [x for x in tally.switched_out.most_common(5) if x[1] >= 2],
             },
             "setup": {
                 "rate_per_action": _rate(kinds["setup"], actions),
@@ -410,16 +400,6 @@ def render_profile(profile: dict[str, Any]) -> str:
     if "note" in profile:
         lines += [f"> {profile['note']}", ""]
 
-    def listing(title: str, items: list[Any]) -> None:
-        lines.append(f"**{title}:** " + (", ".join(f"{name} x{count}" for name, count in items) or "none seen"))
-
-    listing("Leads", profile["leads"])
-    listing("Most used moves", profile["most_used_moves"])
-    trouble = profile["troublesome_pokemon"]
-    lines.append(
-        "**Pokémon that knocked ours out:** "
-        + (", ".join(f"{t['species']} ({t['kos']} KOs in {t['appearances']} battle(s))" for t in trouble) or "none")
-    )
     if profile["confidence"] == "insufficient":
         return "\n".join(lines) + "\n"
 
@@ -449,9 +429,4 @@ def render_profile(profile: dict[str, Any]) -> str:
         "",
         "Action mix: " + ", ".join(f"{k} {v['value']:.0%}" for k, v in profile["action_mix"].items()),
     ]
-    if switching["common_patterns"]:
-        lines.append(
-            "Repeated switches: "
-            + ", ".join(f"{p['out']} -> {p['in']} x{p['count']}" for p in switching["common_patterns"])
-        )
     return "\n".join(lines) + "\n"

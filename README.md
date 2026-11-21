@@ -254,21 +254,36 @@ uv run python scripts/evaluate.py heuristic_v2 --opponents heuristic simple_heur
 uv run python scripts/play_official.py --bot heuristic_v2 --accept-from FriendName
 ```
 
-## Opponent profiles
+## Opponent ratings, tier list and player cards
 
 ```bash
-uv run python scripts/opponent_report.py                 # everyone you have played
-uv run python scripts/opponent_report.py SomeUsername    # one person in detail
+uv run python scripts/team_strength_report.py      # after new battles: measure team luck first
+uv run python scripts/opponent_report.py --write   # tier list in the terminal, pages in data/opponent_reports/
+uv run python scripts/opponent_report.py --write --exclude MyOwnAccount
 ```
 
-Built from the battle logs only: leads, move and switch frequencies,
-aggression, setup use, repeated switches, how predictable their move choices
-are, attacks into resistances and immunities, and which of their Pokémon
-knocked ours out. Below five battles a profile shows counts and draws no
-conclusions; above that, every rate carries its sample size and a 95%
-interval, and a tendency is stated only when the interval clears its
-threshold. Profiles name real people, so they are saved (with `--write`) under
-the git-ignored `data/profiles/`.
+- **Rating.** Everyone plays the same bot, so the bot is the yardstick:
+  1500, Elo-style. Each result is adjusted for that battle's team strength,
+  so a win with a weaker team counts for more. With few games, ratings stay
+  near 1500 and carry a wide "likely" range.
+- **Power level.** The chance to beat the bot if both teams were equally
+  strong.
+- **Tiers.** S to D relative to the bot, with "B" as level with it; under
+  5 games a rating is provisional.
+- **Player card**, one HTML page per player, written to share with them:
+  their record, tier and power level, how lucky their teams were, how they play
+  and how they beat the bot, plus one thing to try. "How they play" is measured
+  in the situation of each decision, not from the random teams: switching out
+  of bad matchups, switch-ins that resisted the bot's attack, setup timing,
+  Tera use, and closing out leads. Every statement shows its count, nothing is
+  claimed from fewer than 3 examples, and other players on a card's tier list
+  are anonymous unless `--name-others` is given.
+- **Also written:** `tier-list.html` (everyone, named, for you) and
+  `analyst.md` (the numbers with intervals). All of it names real people, so
+  it lives in git-ignored `data/`.
+
+Leads, favourite moves and "which Pokémon beat ours" are no longer
+reported: with random teams they describe the draw, not the player.
 
 ## Team strength: luck of the draw or play?
 
