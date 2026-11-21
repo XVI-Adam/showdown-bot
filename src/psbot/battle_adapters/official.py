@@ -178,6 +178,9 @@ class OfficialPSClient(PSClient):
         # and is told about every successful login.
         self.outgoing_filter: OutgoingFilter | None = None
         self.on_login: Callable[[], None] | None = None
+        # Challenge feedback: private notices (sender, text) and popups (text).
+        self.on_notice: Callable[[str, str], None] | None = None
+        self.on_popup: Callable[[str], None] | None = None
         self._login_error: LoginError | None = None
         self.confirmed_username: str | None = None
         loop = kwargs.get("loop", POKE_LOOP)
@@ -295,9 +298,17 @@ class OfficialPSClient(PSClient):
             # re-sent after a login); poke-env only dispatches single lines.
             for line in message.split("\n"):
                 fields = line.split("|")
-                if len(fields) > 4 and fields[1] == "pm" and fields[4].startswith("/challenge"):
+                if len(fields) <= 4 or fields[1] != "pm":
+                    continue
+                body = "|".join(fields[4:])
+                if body.startswith("/challenge"):
                     await self._handle_challenge_request(fields)
+                elif body.startswith(("/nonotify ", "/text ")) and self.on_notice is not None:
+                    # e.g. "/nonotify Name rejected the challenge."
+                    self.on_notice(identity_name(fields[2]), body.split(" ", 1)[1])
             return
+        if kind == "popup" and self.on_popup is not None:
+            self.on_popup(message.split("|popup|", 1)[-1].replace("||", "\n"))
         await super()._handle_message(message)
 
     def _on_updateuser(self, user: str, named: str) -> None:

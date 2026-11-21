@@ -130,6 +130,44 @@ It plays one battle (`-n` for more) and exits. Rules the session enforces:
 
 Battles are saved to `data/human/official-<time>.jsonl` (see the next section).
 
+### Challenging players
+
+The bot only challenges people on a consent list. Add someone after they
+have said yes:
+
+```bash
+uv run python scripts/challenge_list.py add FriendName "said yes on Discord"
+uv run python scripts/challenge_list.py              # the list and today's limits
+```
+
+```bash
+uv run python scripts/play_official.py --challenge FriendName          # one game
+uv run python scripts/play_official.py --series FriendName -n 5        # rematch after each game, up to 5
+uv run python scripts/play_official.py --rotate -n 6                   # everyone on the list in turn
+```
+
+How each answer is handled:
+
+| Answer | What the bot does |
+| --- | --- |
+| Accepted | Plays the game, then waits at least 15 s before the next challenge |
+| Declined, or no answer within 2 minutes | Leaves that player alone for 10 minutes |
+| Declined twice in a day | Doesn't challenge them again that day |
+| Offline, or blocking challenges | Skips them for this run, with no strike |
+
+Other limits:
+
+- one challenge pending at a time;
+- at most 20 challenges a day in total (`--daily-cap`);
+- the bot never challenges anyone off the list and never searches the ladder;
+- players on the list may challenge the bot too.
+
+Only what these limits need is stored: today's date, the challenge count and
+each player's declines today, in git-ignored `data/challenges/`. It resets
+daily. Showdown's bot policy says playing a bot must be the person's choice;
+it does not say whether a registered bot may send challenges, so check with
+staff (`/ht`) before rotating through anyone beyond friends who agreed.
+
 What the adapter adds to poke-env's client:
 
 - login as documented in the simulator's `PROTOCOL.md`, with every failure

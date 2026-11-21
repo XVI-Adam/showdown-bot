@@ -212,6 +212,14 @@ class OfficialSession:
         client._on_update_challenges = _ignore
         client.outgoing_filter = self.guard.outgoing
         client.on_login = self._on_login
+        client.on_notice = self._on_notice
+        client.on_popup = self._on_popup
+        # What became of our latest challenge: "pending", "accepted",
+        # "declined", "expired" (no answer in time), "unavailable" (offline,
+        # blocking challenges...) or "too_soon" (the server's 10 s rule).
+        self.challenge_target: str | None = None
+        self.challenge_status: str | None = None
+        self.challenge_detail = ""
 
     # ------------------------------------------------------------ challenges
 
@@ -222,6 +230,25 @@ class OfficialSession:
     @property
     def _slots_left(self) -> int:
         return self.max_battles - len(self.outcomes) - int(self._busy)
+
+    def _settle(self, status: str, detail: str = "") -> None:
+        if self.challenge_status == "pending":
+            self.challenge_status, self.challenge_detail = status, detail
+            if status != "accepted":
+                self._expected, self._outgoing_open = None, False
+            logger.info("challenge to %s: %s%s", self.challenge_target, status, f" ({detail})" if detail else "")
+
+    def _on_notice(self, sender: str, text: str) -> None:
+        if to_id_str(sender) == self.challenge_target and "rejected the challenge" in text:
+            self._settle("declined")
+
+    def _on_popup(self, text: str) -> None:
+        if self.challenge_status != "pending":
+            return
+        if "less than 10 seconds" in text:
+            self._settle("too_soon", text)
+        elif any(s in text for s in ("was not found", "not accepting challenges", "pending challenges", "already challenging")):
+            self._settle("unavailable", text.strip()[:200])
 
     async def _on_challenge(self, fields: list[str]) -> None:
         """``|pm|FROM|TO|/challenge FORMAT|...`` or a bare ``/challenge``,
@@ -281,6 +308,7 @@ class OfficialSession:
         await self.client.logged_in.wait()
         self._expect(target, self.challenge_timeout)
         self._outgoing_open = True
+        self.challenge_target, self.challenge_status, self.challenge_detail = target, "pending", ""
         logger.info("challenging %s", target)
         await self.client.send_message("/utm null")
         await self.client.send_message(f"/challenge {target}, {self.format}")
@@ -338,6 +366,8 @@ class OfficialSession:
         if self.active is None and ids[index] != self._expected:
             return f"no battle with {ids[index]} was agreed"
         self._verified.add(room)
+        if ids[index] == self.challenge_target:
+            self._settle("accepted")
         self.active, self.opponent = room, names[index]
         self._expected, self._outgoing_open = None, False
         logger.info("%s: battle against %s", room, self.opponent)
@@ -397,6 +427,8 @@ class OfficialSession:
             if self._outgoing_open:
                 self._outgoing_open = False
                 await self.client.send_message(f"/cancelchallenge {who}")
+            if who == self.challenge_target:
+                self._settle("expired")
         if self.active is None or not self.client.logged_in.is_set():
             return
         if self._lost_connection_at is not None:
