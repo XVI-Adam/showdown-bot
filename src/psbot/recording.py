@@ -108,9 +108,16 @@ class BattleRecorder:
         }
 
     def record_action(
-        self, battle: AbstractBattle, action: str, extra: dict[str, Any] | None = None
+        self,
+        battle: AbstractBattle,
+        action: str,
+        extra: dict[str, Any] | None = None,
+        order: Any = None,
     ) -> None:
-        """Store a decision made without the heuristic engine (learned agents)."""
+        """Store a decision made without the heuristic engine (learned agents).
+
+        ``order`` is accepted for compatibility with
+        ``psbot.dataset.HumanBattleRecorder`` and not used here."""
         entry = self._base_entry(battle)
         entry["action"] = action
         entry.update(extra or {})
@@ -122,9 +129,11 @@ class BattleRecorder:
         evaluations: Sequence[ActionEvaluation],
         fallback: str | None = None,
         extra: dict[str, Any] | None = None,
+        order: Any = None,
     ) -> None:
         """Store one decision. ``fallback`` explains a non-heuristic choice;
-        ``extra`` adds fields such as the agent's predictions for this turn."""
+        ``extra`` adds fields such as the agent's predictions for this turn;
+        ``order`` is unused here (see ``record_action``)."""
         tag = battle.battle_tag
         entry = self._base_entry(battle)
         if evaluations:

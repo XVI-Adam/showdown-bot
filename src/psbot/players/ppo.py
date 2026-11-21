@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import torch
 from poke_env.battle import AbstractBattle, Move, Pokemon
 from poke_env.environment import SinglesEnv
 from poke_env.player import BattleOrder, DefaultBattleOrder, Player
@@ -91,8 +92,33 @@ class PPOPlayer(Player):
             order = self.choose_random_move(battle)
             extra["illegal"] = True
         if self.recorder is not None:
-            self.recorder.record_action(battle, self._label(order), extra)
+            if getattr(self.recorder, "wants_policy", False):
+                extra.update(self._policy_details(observation))
+            self.recorder.record_action(battle, self._label(order), extra, order=order)
         return order
+
+    def _policy_details(self, observation: dict[str, Any]) -> dict[str, Any]:
+        """For the human-battle dataset: the policy's probability for each of
+        the 26 actions, the observation it saw, and (hybrid) the heuristic
+        score it was given per action. Read-only: the action is already chosen."""
+        details: dict[str, Any] = {
+            "observation": observation["observation"],
+            "deterministic": self.deterministic,
+        }
+        try:
+            tensors, _ = self.policy.obs_to_tensor(observation)
+            with torch.no_grad():
+                probabilities = self.policy.get_distribution(tensors).distribution.probs[0]
+            details["probabilities"] = [round(float(p), 6) for p in probabilities]
+        except Exception:
+            logger.debug("could not read action probabilities", exc_info=True)
+        if self._is_hybrid:
+            mask = observation["action_mask"]
+            details["heuristic_scores"] = [
+                round(float(score), 4) if allowed else None
+                for score, allowed in zip(observation["observation"][PRIOR_SLICE], mask)
+            ]
+        return details
 
     @staticmethod
     def _label(order: BattleOrder) -> str:

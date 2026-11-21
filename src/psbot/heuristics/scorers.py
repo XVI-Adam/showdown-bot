@@ -15,7 +15,8 @@ from typing import Callable
 from poke_env.battle import Move, MoveCategory, Pokemon, SideCondition, Target
 
 from psbot.heuristics.context import BattleContext
-from psbot.heuristics.damage import max_hp_points
+from psbot.heuristics.damage import estimate_damage, max_hp_points
+from psbot.heuristics.lookahead import action_key
 from psbot.heuristics.mechanics import (
     HAZARD_REMOVAL_MOVES,
     MAX_LAYERS,
@@ -104,7 +105,10 @@ def score_damage_taken(ctx: BattleContext, move: Move) -> ScoreComponent | None:
         return None
     reason = f"{ctx.opp.species} may hit with {threat.move_id} for ~{threat.damage.expected:.0%}"
     if not threat.revealed:
-        reason += " (unrevealed)"
+        if threat.probability < 1 or ctx.weights.move_model:
+            reason += f" (unrevealed, {threat.probability:.0%} likely to have it)"
+        else:
+            reason += " (unrevealed)"
     if ctx.outspeeds(ctx.me, move.priority):
         p_ko = ctx.damage(ctx.me, move).ko_probability(ctx.opp_hp)
         if p_ko > 0:
@@ -327,6 +331,49 @@ def score_switch_tempo(ctx: BattleContext, mon: Pokemon) -> ScoreComponent | Non
     return ScoreComponent("tempo", value, ", ".join(parts))
 
 
+def score_switch_in_risk(ctx: BattleContext, move: Move) -> ScoreComponent | None:
+    """Cost of an attack that one of their revealed bench Pokémon is immune to.
+
+    We cannot know whether they will switch, so the attack loses a fixed share
+    (``switch_in_risk``) of its damage value: enough to prefer, between two
+    similar attacks, the one nothing on their bench can come in on for free.
+    Only type immunities and abilities already known count; nothing is assumed
+    about Pokémon we have not seen.
+    """
+    risk = ctx.weights.switch_in_risk
+    if risk <= 0 or ctx.me is None or ctx.opp is None or move.category == MoveCategory.STATUS:
+        return None
+    estimate = ctx.damage(ctx.me, move)
+    dealt = min(estimate.mean_fraction, ctx.opp_hp) * estimate.accuracy
+    if dealt <= 0 or estimate.ko_probability(ctx.opp_hp) >= 0.9:
+        return None  # a near-certain knockout is worth it either way
+    for mon in ctx.battle.opponent_team.values():
+        if mon is ctx.opp or mon.fainted or mon.current_hp_fraction < 0.25:
+            continue
+        if estimate_damage(ctx.battle, ctx.me, mon, move).max_fraction <= 0:
+            value = -ctx.weights.damage * dealt * risk
+            return ScoreComponent("coverage", value, f"{mon.species} on their bench is immune")
+    return None
+
+
+def score_projection(ctx: BattleContext, target: Move | Pokemon) -> ScoreComponent | None:
+    """How this action fares when the fight is played forward, relative to our
+    best option: a sweep check while they have unseen Pokémon, a minimax
+    endgame search once everything left is known. Never positive: it marks
+    down actions that project worse, it does not inflate the best one."""
+    projection = ctx.projection
+    if projection is None:
+        return None
+    weight = ctx.weights.endgame if projection.mode == "endgame" else ctx.weights.sweep
+    key = action_key(target)
+    if weight <= 0 or key not in projection.values:
+        return None
+    shortfall = projection.values[key] - projection.best
+    if shortfall > -1e-9:
+        return None
+    return ScoreComponent(projection.mode, weight * shortfall, projection.notes[key])
+
+
 DEFAULT_MOVE_SCORERS: tuple[MoveScorer, ...] = (
     score_damage,
     score_ko,
@@ -337,9 +384,12 @@ DEFAULT_MOVE_SCORERS: tuple[MoveScorer, ...] = (
     score_self_cost,
     score_damage_taken,
     score_matchup,
+    score_switch_in_risk,
+    score_projection,
 )
 DEFAULT_SWITCH_SCORERS: tuple[SwitchScorer, ...] = (
     score_switch_entry,
     score_switch_matchup,
     score_switch_tempo,
+    score_projection,
 )

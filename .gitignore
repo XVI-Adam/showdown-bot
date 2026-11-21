@@ -19,3 +19,7 @@ data/
 checkpoints/
 
 .DS_Store
+
+# Bot account credentials (see src/psbot/battle_adapters/credentials.py)
+.env
+.env.*

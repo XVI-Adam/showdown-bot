@@ -17,6 +17,7 @@ against a local simulator.
 ```bash
 uv sync                      # Python 3.12 venv + pinned dependencies
 scripts/setup_showdown.sh    # local Showdown server into vendor/
+uv run python scripts/build_randbats_stats.py   # set statistics for the opponent move model (about 2 minutes)
 ```
 
 ## Run
@@ -79,6 +80,150 @@ Things to know:
   it. To play friends' bots or friends themselves, use the official site, not
   this server.
 
+## Official server
+
+`psbot.battle_adapters.official` connects our agents, unchanged, to the
+official Pokémon Showdown server and plays battles there against people you
+name. It never searches the ladder.
+
+**Before any login:** Showdown's bot policy of 2026-10-09
+([announcement](https://www.smogon.com/forums/threads/3789528/)) makes bot
+registration mandatory. In the Showdown client type `/ht`, then choose
+*Something else* > *I want to register my bot*. The adapter refuses to log in
+until you set `PSBOT_BOT_REGISTERED=1`.
+
+Create a `.env` file in the project root (git-ignored; `chmod 600 .env`):
+
+```
+PSBOT_USERNAME=YourBotAccount
+PSBOT_PASSWORD=...
+PSBOT_BOT_REGISTERED=1
+```
+
+```bash
+uv run python scripts/check_official_login.py --handshake-only   # connect only, no account needed
+uv run python scripts/check_official_login.py                    # log in, confirm the name, log out
+```
+
+Play (the other person must have agreed to battle a bot):
+
+```bash
+uv run python scripts/play_official.py --accept-from FriendName      # wait for their challenge
+uv run python scripts/play_official.py --challenge FriendName        # or challenge them once
+uv run python scripts/play_official.py --bot checkpoints/hybrid-v2-sparse/final.zip \
+    --accept-from FriendOne,FriendTwo -n 3                           # hybrid, up to 3 battles
+```
+
+It plays one battle (`-n` for more) and exits. Rules the session enforces:
+
+- only **[Gen 9] Random Battle** challenges from the named users are accepted;
+  anything else is declined, once per challenger per minute;
+- one battle at a time; a challenge is accepted once even if announced twice;
+- a battle room that is not in our format or not against the agreed opponent
+  is forfeited and left;
+- every request from the server is answered exactly once: choices carry the
+  server's request number and repeats are dropped;
+- a dropped connection is retried five times (2 to 30 s apart); the server
+  puts the bot back in its battle and the state is rebuilt from the log;
+- if nothing happens in a battle for 3 minutes the bot starts the timer;
+- Ctrl-C withdraws any challenge, forfeits a battle in progress and logs out.
+
+Battles are saved to `data/human/official-<time>.jsonl` (see the next section).
+
+### Challenging players
+
+The bot only challenges people on a consent list. Add someone after they
+have said yes:
+
+```bash
+uv run python scripts/challenge_list.py add FriendName "said yes on Discord"
+uv run python scripts/challenge_list.py              # the list and today's limits
+```
+
+```bash
+uv run python scripts/play_official.py --challenge FriendName          # one game
+uv run python scripts/play_official.py --series FriendName -n 5        # rematch after each game, up to 5
+uv run python scripts/play_official.py --rotate -n 6                   # everyone on the list in turn
+```
+
+How each answer is handled:
+
+| Answer | What the bot does |
+| --- | --- |
+| Accepted | Plays the game, then waits at least 15 s before the next challenge |
+| Declined, or no answer within 2 minutes | Leaves that player alone for 10 minutes |
+| Declined twice in a day | Doesn't challenge them again that day |
+| Offline, or blocking challenges | Skips them for this run, with no strike |
+
+Other limits:
+
+- one challenge pending at a time;
+- at most 20 challenges a day in total (`--daily-cap`);
+- the bot never challenges anyone off the list and never searches the ladder;
+- players on the list may challenge the bot too.
+
+Only what these limits need is stored: today's date, the challenge count and
+each player's declines today, in git-ignored `data/challenges/`. It resets
+daily. Showdown's bot policy says playing a bot must be the person's choice;
+it does not say whether a registered bot may send challenges, so check with
+staff (`/ht`) before rotating through anyone beyond friends who agreed.
+
+What the adapter adds to poke-env's client:
+
+- login as documented in the simulator's `PROTOCOL.md`, with every failure
+  reported as a clear error;
+- the login assertion is redacted from all logs (poke-env's and the websocket
+  library's), and the password is never stored where it can be printed;
+- outgoing messages are spaced 650 ms apart, inside the server's rate limit;
+- the password can only be sent to the official login server.
+
+## Human battle dataset
+
+Every finished battle against a person becomes one JSON line in `data/human/`
+(git-ignored, and separate from the bot-versus-bot logs in `logs/`). The full
+layout is documented at the top of `src/psbot/dataset/schema.py`. Per battle:
+id, date, format, server, the agent and its checkpoint (path and SHA-256), the
+opponent's username, the outcome, both teams as known, and the public battle
+log without chat. Per decision:
+
+- both sides' Pokémon with HP, status, boosts, and the field conditions;
+- the legal actions and the 26-entry action mask the learned agents use;
+- the selected action;
+- the heuristic engine's score for every legal action, split into its named
+  components, or the policy's probability for each action (plus, for the
+  hybrid, the heuristic scores it was shown);
+- the observation vector at that moment;
+- what the opponent was then seen to do.
+
+Battles are partially observable, so every fact about the opponent is labelled:
+
+| Label | Meaning |
+| --- | --- |
+| `revealed` | The battle log showed it: a move it used, an ability or item the log named, its Tera type. |
+| `inferred` | Not shown, but certain from public random-battle data (one possible ability, a forme's required item). The species' possible moves are listed once per battle under this label. |
+| `unknown` | Neither. The value is null. |
+
+"Revealed" is read from the log, not from poke-env's Pokémon objects, because
+both poke-env and our damage code fill in likely abilities and items. When the
+log is ambiguous about whose ability an effect belongs to, the fact is left
+unrevealed. Each decision records only what had been shown by then.
+
+```bash
+uv run python scripts/validate_dataset.py        # check and summarise data/human/
+```
+
+The validator re-reads each battle's log and rejects, among other things, a
+"revealed" fact that is not in the log at that point, an illegal selected
+action, and scores that do not add up. Measured on the local simulator, where
+the opponent's true team is known: across 450 battles every revealed ability
+(600), item (1,154) and Tera type (259) was correct, and 3,428 of 3,430
+revealed moves; the two misses were Illusions that never broke, which fool the
+log itself.
+
+`psbot.dataset.to_legacy_record` converts a record to the older log layout that
+`psbot.analysis` reads. The two battles played before this recorder existed
+are in `logs/human/` in that older layout.
+
 ## The heuristic agent
 
 Every legal move and switch gets a score that is the sum of named components,
@@ -116,6 +261,157 @@ Known weaknesses, for later phases to address:
 - **Hidden information is assumed away**: no Choice Scarf or opposing priority
   when judging who moves first, and uncertain abilities are ignored.
 - **Terastallization is offensive-only**; it never Teras defensively.
+
+## The Phase 5 engine (`heuristic_v2`)
+
+`heuristic` is still the baseline above, unchanged, because the trained hybrids
+take its scores as input. `heuristic_v2` is the same engine with four additions
+switched on (`v2_weights` in `heuristics/context.py`):
+
+- **Opponent move model.** The simulator's own team generator is sampled
+  200,000 times to count what sets each species really gets. Given what a
+  Pokémon has shown, each unrevealed move gets a probability, and the threat
+  to us is weighted by them. Probabilities are well calibrated (a move
+  predicted at 50% is there 50% of the time). An unrevealed move is never
+  treated as confirmed, even at 100%.
+- **Sweep check and endgame search.** The fight is played forward with both
+  sides attacking. Early on this asks what their active Pokémon costs us
+  before it is stopped; once everything left is known, it searches the rest of
+  the battle by minimax over replacement choices.
+- **Damage refinements.** Possible unseen abilities that nullify a move,
+  accuracy and evasion stages, and a discount for attacks their revealed bench
+  is immune to.
+
+Measured against the baseline in 3,000-battle runs, the move model wins 53.7%
+(95% interval 51.9-55.5%). The other additions have shown no measurable effect
+on top of it, and the full `heuristic_v2` wins 52.8% (51.0-54.5%). Details,
+calibration tables and what remains open: [reports/phase5-engine.md](reports/phase5-engine.md).
+
+```bash
+uv run python scripts/evaluate.py heuristic_v2 --opponents heuristic simple_heuristics -n 1000
+uv run python scripts/play_official.py --bot heuristic_v2 --accept-from FriendName
+```
+
+## Opponent ratings, tier list and player cards
+
+```bash
+uv run python scripts/team_strength_report.py      # after new battles: measure team luck first
+uv run python scripts/opponent_report.py --write   # tier list in the terminal, pages in data/opponent_reports/
+uv run python scripts/opponent_report.py --write --exclude MyOwnAccount
+```
+
+- **Rating.** Everyone plays the same bot, so the bot is the yardstick:
+  1500, Elo-style. Each result is adjusted for that battle's team strength,
+  so a win with a weaker team counts for more. With few games, ratings stay
+  near 1500 and carry a wide "likely" range.
+- **Power level.** The chance to beat the bot if both teams were equally
+  strong.
+- **Tiers.** S to D relative to the bot, with "B" as level with it; under
+  5 games a rating is provisional.
+- **Player card**, one HTML page per player, written to share with them:
+  their record, tier and power level, how lucky their teams were, how they play
+  and how they beat the bot, plus one thing to try. "How they play" is measured
+  in the situation of each decision, not from the random teams: switching out
+  of bad matchups, switch-ins that resisted the bot's attack, setup timing,
+  Tera use, and closing out leads. Every statement shows its count, nothing is
+  claimed from fewer than 3 examples, and other players on a card's tier list
+  are anonymous unless `--name-others` is given.
+- **Also written:** `tier-list.html` (everyone, named, for you) and
+  `analyst.md` (the numbers with intervals). All of it names real people, so
+  it lives in git-ignored `data/`.
+
+Leads, favourite moves and "which Pokémon beat ours" are no longer
+reported: with random teams they describe the draw, not the player.
+
+## Team strength: luck of the draw or play?
+
+Random teams are not equally strong. For each recorded human battle, both
+teams are rebuilt and the same bot plays both sides hundreds of times on the
+local simulator. Our team's win share is that matchup's team strength.
+
+- **Rebuilding.** Our team is exact. For the opponent, everything the battle
+  revealed is kept; unrevealed moves, items, abilities, Tera types and unseen
+  Pokémon are sampled from the measured random-battle sets, and every team
+  passes the simulator's own validator before it plays.
+- **Validation.** On 60 bot battles where both teams are known, sampling
+  agreed with the true teams (correlation 0.82, no bias), and team strength
+  predicts the winner.
+- **Calibration.** Raw values are too extreme, so they are calibrated against
+  the actual outcomes.
+- **First result.** All five losses to one player came with the weaker team
+  (calibrated win chance 15-35% each). Bad draws alone give 0 wins out of 5
+  about 26% of the time, so the streak does not show that the player outplayed
+  the bot. More battles are needed to tell either way.
+
+```bash
+uv run python scripts/team_strength_report.py              # -> reports/team-strength.md (opponents shown as A, B, C)
+uv run python scripts/team_strength_report.py --validate 60
+```
+
+Only win counts are kept (`data/team_strength/`, a few KB); replay logs are
+discarded.
+
+## Phase 7 evaluation
+
+28,000 battles: 8 agents in a round-robin, 1,000 battles per pairing, each
+battle measured from both sides. Full report with every metric and interval:
+[reports/phase7-evaluation.md](reports/phase7-evaluation.md).
+
+| Agent | Win rate vs the baseline's pool | vs all others |
+| --- | --- | --- |
+| `heuristic_v2` | 83.9% (82.9-84.9%) | 78.9% |
+| `heuristic` (baseline, 81.3% in the final evaluation) | 82.8% (81.7-83.8%) | 77.2% |
+| `hybrid` | 2.3 points below `heuristic` on the same opponents | 74.5% |
+| `bc` | 65.0% | 52.3% |
+
+- **`heuristic_v2` vs the baseline:** 52.7% head to head over 4,000 battles
+  (51.2-54.2%). It gets swept less (13.3% vs 16.2%), loses fewer Pokémon
+  right after switching in, and misses fewer sure KOs. Immunity hits and
+  endgames are unchanged.
+- **Default agent:** `heuristic` stays the default until `heuristic_v2` holds
+  up against people.
+- **Human results:** 6-5 over 11 battles, too few to rank anything.
+- **Bots vs people:** bot opponents almost never set up a sweeper (under 3% of
+  battles); the people did in 5 of 11. Bot evaluation barely tests the
+  weakness that matters most.
+
+Metrics include win rate per opponent, net knockouts by stage, setup
+sweepers, sweeps, knockouts by not-yet-seen moves, endgame win rate (from
+ahead, level or behind), missed sure KOs, moves into immunities, switching
+mistakes and remaining Pokémon. They are defined once in
+`src/psbot/evaluation/metrics.py` and computed from the full battle log for
+every agent, scripted bots included.
+
+```bash
+uv run python scripts/evaluate_all.py --run-dir logs/eval/phase7-mine -n 1000 --shard 0/4   # x4 in parallel: 0/4 .. 3/4
+uv run python scripts/evaluate_all.py --run-dir logs/eval/phase7-mine --report
+```
+
+## Learning from games (Phase 6)
+
+Offline only; no production agent changes. Full results: [reports/phase6-learning.md](reports/phase6-learning.md).
+
+- **Behaviour cloning.** `heuristic_v2` played 4,000 local battles as teacher,
+  and the PPO agents' masked network was trained to imitate it. Data is split
+  by battle and checked for leakage, and masks are kept, so no illegal action
+  is possible. Result `checkpoints/bc-v1`: 60% agreement with the teacher on
+  separate test battles, about PPO-level strength (20% vs heuristic, 59% vs
+  SimpleHeuristics). Not promoted. Larger networks do no better: the 112 basic
+  features lack what the teacher uses.
+- **Self-play fine-tuning.** The cloned model resumes in `train_ppo.py`.
+  Self-play against frozen checkpoints is not supported yet.
+- **Opponent adaptation.** Predicting opponents' choices per person versus
+  population-wide works on bots with distinct styles, after about 5 battles.
+  On the 9 human battles so far there is no detectable gain.
+
+Human opponents' actions are never used as imitation targets: from our side
+we see neither their observation nor their legal actions.
+
+```bash
+uv run python scripts/generate_teacher_data.py --name v2-train -n 800   # synthetic data -> data/synthetic/
+uv run python scripts/train_bc.py --run-name bc-v2 --train data/synthetic/v2-train.npz --test data/synthetic/v2-test.npz
+uv run python scripts/analyze_opponent_adaptation.py                    # on data/human/
+```
 
 ## The PPO agent
 
@@ -249,6 +545,11 @@ src/psbot/
     context.py       per-turn analysis (threats, exchanges) + tunable weights
     scorers.py       one function per scoring component
     engine.py        sums components, ranks actions, decides Terastallization
+    lookahead.py     forward projection: sweep check and minimax endgame (v2 only)
+  opponent_model/    belief over an opposing Pokémon's set, from measured set statistics
+  analytics/         per-opponent profiles; team strength by matchup replay
+  training/          decision datasets, behaviour cloning, opponent-adaptation analysis
+  evaluation/        Phase 7: per-battle metrics, decision probe, aggregation, report
   rl/
     observation.py   battle -> 112 floats, laid out to match the action space
     env.py           Gymnasium environment (poke-env SinglesEnv) + reward
@@ -256,16 +557,20 @@ src/psbot/
     policy.py        masked PPO policy, and the hybrid policy with a learnable heuristic prior
     callbacks.py     win-rate logging, critic warm-up
   opponents.py       opponent registry: scripted players or saved checkpoints
+  dataset/           human-battle records: reveal tracking, recorder, schema and validator
   hosting.py         a bot that accepts challenges from people on the local server
+  battle_adapters/   official server: credentials, login, redaction, rate limit, reconnect,
+                     and the consent-based challenge/battle session
   analysis.py        what separates losses from wins, prediction accuracy, hybrid deviations
   report.py          Markdown performance report from evaluation results
   players/           agents (poke-env Player subclasses): heuristic, ppo (also plays hybrids)
 scripts/             server setup/start, runnable entry points
 tests/               unit tests + end-to-end tests against the simulator
 vendor/              Showdown checkout (git-ignored, pinned by setup script)
-reports/             final evaluation report
+reports/             evaluation reports
 checkpoints/         saved models (git-ignored)
 logs/                battle logs, statistics, training curves (git-ignored)
+data/                human battles (human/), synthetic training data (synthetic/), set statistics (git-ignored)
 ```
 
 ## Security
@@ -274,6 +579,10 @@ The server runs with `--no-security` (no rate limits, no login checks) so bots
 can play thousands of battles quickly. `setup_showdown.sh` therefore binds it
 to `127.0.0.1`, `start_server.sh` refuses to start otherwise, and
 `psbot.config` rejects non-loopback hosts. Do not port-forward it.
+
+The official-server adapter is separate: it never uses the local server's
+password-less login, reads the bot account from the environment or `.env`
+(never committed), and keeps the password and login assertion out of logs.
 
 ## Pinned versions
 
